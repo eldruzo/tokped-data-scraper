@@ -13,7 +13,6 @@ A TypeScript/Node.js utility that scrapes 100 handphone products from Tokopedia 
 5. [How Pagination Works](#5-how-pagination-works)
 6. [The Description Field](#6-the-description-field)
 7. [Known Limitations](#7-known-limitations)
-8. [Interview Preparation](#8-interview-preparation)
 
 ---
 
@@ -174,61 +173,3 @@ The static headers (including `x-version`, `bd-device-id`, `bd-web-id`) were cap
 There is no persistent storage, deduplication, or incremental sync. It is a single-run assessment tool.
 
 ---
-
-## 8. Interview Preparation
-
-### Plain-English Explanation of the Approach
-
-"I opened the Tokopedia search page in Chrome, then opened DevTools and watched the Network tab while the page loaded. I saw that the browser was making a POST request to `gql.tokopedia.com` — a GraphQL API — and getting back structured JSON with exactly the product data I needed. I copied the request headers from that call (user-agent, device IDs, content-type, etc.) and replicated the same HTTP request directly in Node.js using axios. The API gives me the data immediately, no HTML parsing or headless browser required."
-
-### Why Direct API Calls Beat a Headless Browser
-
-| Factor | Headless browser (Playwright/Puppeteer) | Direct API (axios) |
-|---|---|---|
-| Startup time | 3–5 s per run (Chrome launch) | ~50 ms |
-| Memory | 200–500 MB | ~30 MB |
-| Reliability | Breaks when the page layout changes | Breaks only when the API schema changes |
-| Speed | Sequential page loads | Parallel-capable requests |
-| Complexity | Needs selector maintenance | Needs only header/payload maintenance |
-
-The only time you need a headless browser is when the data is rendered client-side *without* a discoverable API — for example, a canvas element or a heavily obfuscated frontend.
-
-### Explaining Pagination to a Non-Technical Interviewer
-
-"Imagine a database of 10,000 phones. Asking for all 10,000 at once would be slow and wasteful. Instead, the API works like pages in a book — you ask for page 1 (items 1–60), then page 2 (items 61–120), and so on. Each request includes a page number and a starting position so the server knows exactly which slice to return. We only needed 100 products, so we asked for page 1 (all 60) and the first 40 items from page 2."
-
-### Addressing the Description Limitation Honestly
-
-"The description field is genuinely optional in this design — and intentionally so. Fetching it adds 100 extra network requests, which takes about 2.5 minutes and increases the risk of hitting the API's rate limit. For an assessment that only requires 100 products, shipping a reliable fast-path first and making descriptions opt-in was the pragmatic trade-off. In a production system I would pre-fetch descriptions in parallel batches or store them in a queue for async processing."
-
-### What "Polite Scraping" Means and Why It Matters
-
-Polite scraping means behaving like a considerate user rather than a flood of automated traffic:
-- **Delays between requests** (1 s for search pages, 1.5 s for descriptions) so the server isn't overwhelmed
-- **Retrying gracefully** with back-off rather than hammering on failures
-- **Stopping on 4xx errors** rather than retrying indefinitely when the server signals a client problem
-- **Sending realistic headers** so the server can classify the traffic correctly
-
-It matters both ethically (you're using a shared resource) and practically (aggressive scrapers get IP-banned quickly).
-
-### Likely Interview Questions & Honest Answers
-
-**Q: How did you discover these API endpoints?**
-A: Browser DevTools. I opened the Network tab, filtered by `Fetch/XHR`, navigated the Tokopedia search page, and watched which requests fired. The `SearchProductV5Query` and `PDPMainInfo` requests were immediately visible with their full payloads. I copied the headers and body from DevTools and translated them directly into axios calls.
-
-**Q: What happens if Tokopedia changes the required headers?**
-A: The scraper would start returning empty results or errors. The fix is to re-capture the headers from a fresh DevTools session — the `x-version` field in particular looks like a build hash that could change on deploys. A more robust long-term solution would be to automate the header capture step using Playwright just for that purpose, then pass the headers to axios.
-
-**Q: How would you scale this to 10,000 products?**
-A: Introduce concurrency with a worker pool (e.g. `p-limit`) for description fetches, add a persistent store (Redis/Postgres) to checkpoint progress, and implement exponential backoff for rate-limit errors (429). The search phase would need to page through all 167 pages (10,000 / 60).
-
-**Q: How do you know the API schema won't change?**
-A: I don't. GraphQL schemas can change without notice since the API is private/undocumented. The right mitigation is runtime validation (e.g. with `zod`) so the scraper fails fast with a clear error message if the response shape changes, rather than silently producing empty data.
-
-**Q: What would you improve with more time?**
-
-1. **`zod` schema validation** on every API response — fail fast with a useful error instead of returning silent empty strings
-2. **Concurrent description fetching** with a rate-limited pool (e.g. 5 parallel requests, 500 ms apart) to reduce the 2.5-minute overhead to ~30 seconds
-3. **Incremental / resumable runs** — write a checkpoint file so a failed run at product 80 can resume from product 81
-4. **Unit tests** for `parseProductUrl`, `cleanDescription`, and `buildParams` — these pure functions are easy to test and most likely to break on edge-case input
-5. **Automated header refresh** using Playwright headlessly just to capture fresh headers, then passing them to axios — removes the only manual step remaining
